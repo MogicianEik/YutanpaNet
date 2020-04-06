@@ -21,6 +21,7 @@ import argparse
 import sys
 import os.path
 import random
+import sys
 header = ["tname", "tacc", "tlen", "qname","qacc", "qlen", "E-value", "score", "bias", "#", "of","c-Evalue", "i-Evalue", "score", "bias", "hfrom", "hto","afrom", "ato", "efrom", "eto", "acc", "description of target"]
 
 
@@ -769,7 +770,7 @@ def network_visualization_v2(G,gene_feature_file,address,condition = 'linear',na
     jname = name.split('.')[0]
     network_to_json(jnodes,jedges, jname)
     
-    infile = open('template.html.bkp','r')
+    infile = open(sys.path[0]+'/template.html.bkp','r')
     outfile = open(name,'w')
     lines = infile.readlines()
     lines[19] = "    const address = '{}'\n".format('file://'+address)
