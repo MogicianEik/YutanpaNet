@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # coding: utf-8
 
 # In[1]:
@@ -25,7 +25,7 @@ import sys
 header = ["tname", "tacc", "tlen", "qname","qacc", "qlen", "E-value", "score", "bias", "#", "of","c-Evalue", "i-Evalue", "score", "bias", "hfrom", "hto","afrom", "ato", "efrom", "eto", "acc", "description of target"]
 
 
-# In[3]:
+# In[2]:
 
 
 def get_rawdata(raw_table_file):
@@ -34,15 +34,23 @@ def get_rawdata(raw_table_file):
     cols = ['subject_accession','tcid','query_accession','subject_tms','query_tms','status','query_length','subject_length','evalue','perc_idenity','alignment_length','query_coverage','subject_coverage','neighbors']
     df = df[cols]
     df.sort_values(by=['tcid','subject_accession','evalue','neighbors'],ascending=[True,True,True,False],inplace=True)
-    return df
+    # rename repeat accessions in df, separate accession between genome and tcdb
+    repeats = list(set(list(df['query_accession'])) & set(list(df['subject_accession'])))
+    for index,row in df.iterrows():
+        if repeats:
+            if row['subject_accession'] in repeats:
+                df.at[index,'subject_accession'] = row['subject_accession']+':genome'
+            if row['query_accession'] in repeats:
+                df.at[index,'query_accession'] = row['query_accession']+':tcdb'
+    return df, repeats
 
 
-# In[4]:
+# In[3]:
 
 
 
 
-def get_mc(tcdb_faa):
+def get_mc(tcdb_faa, repeats):
     '''
     input a tcdb fasta file and return two lists. One for all single-component systems, one for multi-component systems
     '''
@@ -50,10 +58,13 @@ def get_mc(tcdb_faa):
     with open(tcdb_faa, 'r') as handle:
         for record in SeqIO.parse(handle, 'fasta'):
             tcid = record.id.split('-')[0]
+            acc = record.id.split('-')[1]
+            if acc in repeats:
+                acc = acc+':tcdb'
             if tcid not in systems:
-                systems[tcid] = [record.id.split('-')[1]]
+                systems[tcid] = [acc]
             else:
-                systems[tcid].append(record.id.split('-')[1])
+                systems[tcid].append(acc)
 
     mc = {k:systems[k] for k in systems if len(systems[k])>1}
 
@@ -69,7 +80,7 @@ def get_info(qacc_list, sacc_list, address='/ResearchData/Users/amedrano/RalfRab
     for p in pairs:
         if str(p[1])=='nan':
             continue
-        hmmscan = os.path.join(address,'plots/{}_vs_{}/ssearch_{}_vs_{}/files/hmmscan.out'.format(p[0],p[1],p[1],p[0]))
+        hmmscan = os.path.join(address,'plots/{}_vs_{}/ssearch_{}_vs_{}/files/hmmscan.out'.format(p[0].split(":")[0],p[1].split(":")[0],p[1].split(":")[0],p[0].split(":")[0]))
         hmm = hmmParser(hmmscan)
         df=pd.DataFrame(hmm.matrix,columns=header)
         for index, row in df.iterrows():
@@ -77,7 +88,7 @@ def get_info(qacc_list, sacc_list, address='/ResearchData/Users/amedrano/RalfRab
             if qname not in pfam_dic:
                 pfam_dic[qname] = {}
             pacc = row['tacc'].split('.')[0]
-            if pacc not in pfam_dic[qname]:
+            if pacc not in pfam_dic[qname]: # get rid of ":"
                 pfam_dic[qname][pacc] = {} 
                 pfam_dic[qname][pacc]['cood'] = [[int(row['efrom']),int(row['eto'])]]
                 pfam_dic[qname][pacc]['clan'] = clan_dic[pacc]
@@ -89,8 +100,8 @@ def get_info(qacc_list, sacc_list, address='/ResearchData/Users/amedrano/RalfRab
     return pfam_dic
 
 
-def get_cood(qacc, sacc, address):
-    ssearch = os.path.join(address,'plots/{}_vs_{}/ssearch_{}_vs_{}/files/ssearch36.out'.format(qacc,sacc,sacc,qacc))
+def get_cood(qacc, sacc, address):#TODO: detect accession for repeats and get rid of ':tcdb/:genome'
+    ssearch = os.path.join(address,'plots/{}_vs_{}/ssearch_{}_vs_{}/files/ssearch36.out'.format(qacc.split(":")[0],sacc.split(":")[0],sacc.split(":")[0],qacc.split(":")[0]))
     goal = ''
     with open(ssearch,"r") as f:
         for line in f:
@@ -105,22 +116,24 @@ def get_cood(qacc, sacc, address):
     return q_cood, s_cood
 
 def alignment_has_domain(qacc,sacc,pfam_dic,address ):
+    true_qacc = qacc.split(":")[0]
+    true_sacc = sacc.split(":")[0]
     q_cood,s_cood = get_cood(qacc, sacc,address) # get the alignment coordinates
     # check if one of the protein does not has any domain predicted
     if not qacc in list(pfam_dic.keys()) or not sacc in list(pfam_dic.keys()):
         return [False,False]
 
-    q_domains = list(pfam_dic[qacc].keys())
-    s_domains = list(pfam_dic[sacc].keys())
+    q_domains = list(pfam_dic[true_qacc].keys())
+    s_domains = list(pfam_dic[true_sacc].keys())
     # check if domain exists in both alignments and if there is a common domain
     qdwa = []
     sdwa = []
     for qdacc in q_domains:
-        for loc in pfam_dic[qacc][qdacc]['cood']:
+        for loc in pfam_dic[true_qacc][qdacc]['cood']:
             if (loc[0] <= q_cood[1] and loc[0] >= q_cood[0]) or (loc[1] <= q_cood[1] and loc[1] >= q_cood[0]) or (loc[1] > q_cood[1] and loc[0] < q_cood[0]):
                 qdwa.append(qdacc)
     for sdacc in s_domains:
-        for loc in pfam_dic[sacc][sdacc]['cood']:
+        for loc in pfam_dic[true_sacc][sdacc]['cood']:
             if (loc[0] <= s_cood[1] and loc[0] >= s_cood[0]) or (loc[1] <= s_cood[1] and loc[1] >= s_cood[0]) or (loc[1] > s_cood[1] and loc[0] < s_cood[0]):
                 sdwa.append(sdacc)
       
@@ -134,6 +147,8 @@ def alignment_has_domain(qacc,sacc,pfam_dic,address ):
         return [True,True] # alignment has common domains
             
 def domain_extension(qacc,sacc,pfam_dic,address):
+    qacc = qacc.split(":")[0] # get rid of the ':'
+    sacc = sacc.split(":")[0]
     q_cood,s_cood = get_cood(qacc, sacc,address) # get the alignment coordinates
     qde,sde = get_cood(qacc, sacc,address)
     q_domains = list(pfam_dic[qacc].keys())
@@ -181,15 +196,15 @@ def count_complete_systems(G,nodes): # G is the target network for checking comp
             num = num + 1
     return num
 
-def get_gene_feature(gene_feature_file):
-    stdoutdata = subprocess.getoutput("zgrep CDS {} | cut -f 8,9,10,17".format(gene_feature_file))
+def get_gene_feature(gene_feature_file):#TODO: detect accession for repeats and get rid of ':tcdb/:genome' #TODO: add feature for accession column specification
+    stdoutdata = subprocess.getoutput("zgrep CDS {} | cut -f 8,9,10,11".format(gene_feature_file))
     #a = subprocess.Popen("zgrep gene {} | cut -f 8,9,10,17".format(gene_feature_file), stdout=subprocess.PIPE)
     data = stdoutdata.split()
     #print(data)
     gene_feature = []
     for i in range(int(len(data)/4)):
         index = i*4
-        gene_feature.append([data[index+3],data[index+2],int(data[index]),int(data[index+1])])
+        gene_feature.append([data[index+3].split(".")[0],data[index+2],int(data[index]),int(data[index+1])])
         # gene_accession/locus_tag, strand, start, end
 
     gene_feature.sort(key=lambda x: x[2]) # sort by the left coordinate
@@ -198,6 +213,7 @@ def get_gene_feature(gene_feature_file):
     gene_dic = {}
     for gene in gene_feature:
         gene_dic[gene[0]] = {'strand':gene[1],'start':gene[2],'end':gene[3]}
+
     return gene_dic
 
 def get_strand(gene_dic, gacc):
@@ -208,16 +224,17 @@ def get_genetic_distance(gene_dic, gacc_list, condition): # returns genetic dist
     # len(gacc_list) must be greater than 1
 
     if len(gacc_list) < 2:
-        raise ValueError('Need more gene accessions!')
+        return {gacc_list[0]:{gacc_list[0]:0}}
+        #raise ValueError('Need more gene accessions!')
     gene_list = list(gene_dic.keys())
     gene_distance = {}
     for gacc in gacc_list:
         gene_distance[gacc] = {}
         for g in gacc_list:
             if condition == 'linear':
-                gene_distance[gacc][g] = abs(gene_list.index(gacc)-gene_list.index(g))
+                gene_distance[gacc][g] = abs(gene_list.index(gacc.split(":")[0])-gene_list.index(g.split(":")[0]))
             else:
-                dis = abs(gene_list.index(gacc)-gene_list.index(g))
+                dis = abs(gene_list.index(gacc.split(":")[0])-gene_list.index(g.split(":")[0]))
                 gene_distance[gacc][g] = min(dis, len(gene_list)-dis)
     return gene_distance
 #eg: et_genetic_distance(gene_dic, gacc_list=['Dmul_00010','Dmul_02460','Dmul_04350'], condition='linear')
@@ -227,7 +244,7 @@ def get_genetic_distance(gene_dic, gacc_list, condition): # returns genetic dist
                 
 
 
-# In[5]:
+# In[4]:
 
 
 def generate_weight(qacc,sacc,evalue,qcov,scov,pfam_dic,address):
@@ -273,7 +290,7 @@ def generate_weight(qacc,sacc,evalue,qcov,scov,pfam_dic,address):
     return int((1-weight)*100)
 
 
-# In[6]:
+# In[5]:
 
 
 def add_system(nodes,edges,T_com,tcid,S): #returns a modified subnetwork by adding a new system into the netowrk #nodes/edges is a dic of all nodes generated by the raw_network
@@ -288,12 +305,12 @@ def add_system(nodes,edges,T_com,tcid,S): #returns a modified subnetwork by addi
                 S.add_node(cand, attr_dic=nodes[cand])
             S.add_edge(cand,cpt,attr_dic=edges[(cand,cpt)])
     if len(list(T_com.predecessors(tcid))) != len(nodes[tcid]['components']):
-            for mcpt in nodes[tcid]['components']:
-                if mcpt not in S and mcpt in nodes:
-                    S.add_node(mcpt,attr_dic=nodes[mcpt])
-                    S.add_edge(tcid,mcpt,attr_dic=edges[(tcid,mcpt)])
-                elif mcpt not in nodes:
-                    print("Data incoherent! {} is in TCDB but not in the raw table!".format(mcpt))
+        for mcpt in nodes[tcid]['components']:
+            if mcpt not in S and mcpt in nodes:
+                S.add_node(mcpt,attr_dic=nodes[mcpt])
+                S.add_edge(tcid,mcpt,attr_dic=edges[(tcid,mcpt)])
+            elif mcpt not in nodes:
+                print("Data incoherent! {} is in TCDB but not in the raw table!".format(mcpt))
     
 def add_system_v2(nodes,edges,T_com,tcid,S): #returns a modified subnetwork by adding a new system into the netowrk #nodes/edges is a dic of all nodes generated by the raw_network
     if tcid not in S:
@@ -307,13 +324,13 @@ def add_system_v2(nodes,edges,T_com,tcid,S): #returns a modified subnetwork by a
                 S.add_node(cand, attr_dic=nodes[cand]['attr_dic'])
             S.add_edge(cand,cpt,attr_dic=edges[(cand,cpt)])
     if len(list(T_com.predecessors(tcid))) != len(nodes[tcid]['attr_dic']['components']):
-            for mcpt in nodes[tcid]['attr_dic']['components']:
-                if mcpt not in S:
-                    S.add_node(mcpt,attr_dic=nodes[mcpt]['attr_dic'])
-                    S.add_edge(tcid,mcpt,attr_dic={'tp':'nohit'})
+        for mcpt in nodes[tcid]['attr_dic']['components']:
+            if mcpt not in S:
+                S.add_node(mcpt,attr_dic=nodes[mcpt]['attr_dic'])
+                S.add_edge(tcid,mcpt,attr_dic={'tp':'nohit'})
 
 
-# In[7]:
+# In[19]:
 
 
 def show_subnetwork(T,raw_tree, node_list,gene_feature_file,address,condition='linear',name='isolated_system.html',raw_network=False): # T is a refined tree that certain systems has been selected
@@ -341,7 +358,7 @@ def show_subnetwork(T,raw_tree, node_list,gene_feature_file,address,condition='l
                     if mcpt not in H:
                         H.add_node(mcpt,attr_dic={'tp':'nohit'})
                         H.add_edge(nacc,mcpt,attr_dic={'tp':'nohit'})
-        if nacc in candidates and nacc not in H:
+        elif nodes[nacc]['attr_dic']['tp']=='subject' and nacc not in H :
             first_cpt = list(T.successors(nacc))[0]
             first_tcid = list(T.successors(first_cpt))[0]
             linked_sys = [first_tcid]
@@ -359,7 +376,7 @@ def show_subnetwork(T,raw_tree, node_list,gene_feature_file,address,condition='l
     network_visualization_v2(H,gene_feature_file,address,condition,name,raw_network)
 
 
-# In[8]:
+# In[7]:
 
 
 def get_tcdic(tvt_out,percent):
@@ -390,7 +407,7 @@ def get_tcdic(tvt_out,percent):
     return tdic
 
 
-# In[9]:
+# In[8]:
 
 
 def CrossValidation(q, s, tcdic, G):#query is tc component, subjuect is candidate protein
@@ -404,7 +421,7 @@ def CrossValidation(q, s, tcdic, G):#query is tc component, subjuect is candidat
     return False
 
 
-# In[10]:
+# In[9]:
 
 
 def verify_fusion(G,address):
@@ -494,10 +511,10 @@ def verify_fusion(G,address):
                     G[cpil[0]][comp]['fusion_verification'] = 'verified'
 
 
-# In[11]:
+# In[10]:
 
 
-def initialize_raw_network(df,pdic,tcdb,address,pog=0.24):
+def initialize_raw_network(df,repeats,pdic,tcdb,address,pog=0.24):
     if not os.path.isfile('tcdb_vs_tcdb.out'):
         tc_components = list(set((df['tcid'] + '-'+df['query_accession']).tolist()))
         out = open('tcdb_entries.faa', 'wb')
@@ -508,8 +525,9 @@ def initialize_raw_network(df,pdic,tcdb,address,pog=0.24):
         os.system("blastp -query tcdb_entries.faa -subject tcdb_entries.faa -use_sw_tback -out tcdb_vs_tcdb.out -evalue 1e-6 -outfmt '7 qacc sacc qstart qend qlen sstart send slen length evalue pident'")
     tcdic = get_tcdic('tcdb_vs_tcdb.out',pog)
     G = nx.DiGraph()
-    mc = get_mc(tcdb)
+    mc = get_mc(tcdb,repeats)
     fusion_candidates = []
+    
     for index,row in df.iterrows():
         if not math.isnan(float(row['evalue'])):
             if row['tcid'] not in G:
@@ -561,10 +579,11 @@ def initialize_raw_network(df,pdic,tcdb,address,pog=0.24):
             G[fc[0]][fc[1]]['fusion'] = False
     # add fusion bonus to the raw network
     verify_fusion(G,address)
+    print(G)
     return G
 
 
-# In[12]:
+# In[11]:
 
 
 def check_complete(nodes,G, s): # s for a system node in graph, nodes is a dic of all node 
@@ -667,7 +686,7 @@ def raw_recom(H,gene_dic,degree_of_tolerance=2,condition='linear'):
     return T
 
 
-# In[13]:
+# In[12]:
 
 
 def network_visualization_v2(G,gene_feature_file,address,condition = 'linear',name='ms_test.html',raw_network=False):
@@ -770,7 +789,7 @@ def network_visualization_v2(G,gene_feature_file,address,condition = 'linear',na
     jname = name.split('.')[0]
     network_to_json(jnodes,jedges, jname)
     
-    infile = open(sys.path[0]+'/template.html.bkp','r')
+    infile = open(sys.path[0]+'/network_GUI_template.html.bkp','r')
     outfile = open(name,'w')
     lines = infile.readlines()
     lines[19] = "    const address = '{}'\n".format('file://'+address)
@@ -781,7 +800,7 @@ def network_visualization_v2(G,gene_feature_file,address,condition = 'linear',na
     
 
 
-# In[14]:
+# In[13]:
 
 
 def network_to_json(jnodes,jedges, subnet_name):
@@ -814,7 +833,7 @@ def network_to_json(jnodes,jedges, subnet_name):
     
 
 
-# In[38]:
+# In[14]:
 
 
 def global_selection(G,T_com,gene_dic,pfam_dic,df,address,green_name,yellow_name,condition='linear',max_cycle=3): # df is raw table data
@@ -1061,11 +1080,10 @@ def test_kit(S,nodes,edges,p,c,gene_dic,pfam_dic,address,condition):
     return score + S[p][c]['attr_dic']['fusion_bonus']
 
 
-# In[17]:
+# In[15]:
 
 
 def progressive_score( S, nodes, edges, p, c ,gene_dic,pfam_dic,address,condition):
-    #basic_score = calculate_individual_basic_score(S, nodes, edges, p, c,pfam_dic,address)
     sys = list(S.successors(c))[0]
     other_cpts = nodes[sys]['attr_dic']['components']
     other_cpts = [x for x in other_cpts if not x == c]
@@ -1087,7 +1105,7 @@ def progressive_score( S, nodes, edges, p, c ,gene_dic,pfam_dic,address,conditio
     return basic_score + bonus_score
 
 
-# In[18]:
+# In[16]:
 
 
 def calculate_individual_basic_score(S, nodes, edges, p, c,pfam_dic,address): # this is only based on single_edge_confidence
@@ -1108,7 +1126,7 @@ def calculate_individual_basic_score(S, nodes, edges, p, c,pfam_dic,address): # 
     
 
 
-# In[19]:
+# In[17]:
 
 
 def calculate_bonus_score(S, nodes, edges, p, c, p_vs_all,initial_bonus=50,reward=30):
@@ -1116,7 +1134,7 @@ def calculate_bonus_score(S, nodes, edges, p, c, p_vs_all,initial_bonus=50,rewar
     # distance matrix should not include other candiates under the same component which is being investigated
     bonus = 0
      # check consecutivity of the rest of gene
-    if p_vs_all[list(p_vs_all.keys())[1]] > 15:
+    if p_vs_all[list(p_vs_all.keys())[1]] > 15 or len(list(p_vs_all.keys())) == 0:
         return bonus
     else:
         prev = 0
@@ -1179,16 +1197,9 @@ def load_network(node_filename,edge_filename):
 
 # G1 = load_network('dorothy_RawNodes.txt', 'dorothy_RawEdges.txt')
 
-# show_subnetwork(T,G1, ['2.A.6.1.10','2.A.6.2.14',
-# '2.A.6.2.26',
-# '2.A.6.2.27',
-# '2.A.6.2.39',
-# '2.A.6.2.40',
-# '2.A.6.2.41',
-# '2.A.6.2.44',
-# '2.A.6.2.45',
-# '2.A.6.2.46',
-# ],'/System/Volumes/Data/ResearchData/Users/amedrano/RalfRabus/Genomes/GCA_000307105.1_ASM30710v1/GCA_000307105.1_ASM30710v1_feature_table.txt.gz','/System/Volumes/Data/ResearchData/Users/amedrano/RalfRabus/MultiomponentSystems/Desulfobacula_toluolica_Tol2/','linear','test_isolated_system.html',False)
+# T1 = load_network('dorothy_RecNodes.txt', 'dorothy_RecEdges.txt')
+
+# show_subnetwork(T1,G1, ['1.A.30.1.2'],'/System/Volumes/Data/ResearchData/Users/amedrano/RalfRabus/Genomes/GCA_000307105.1_ASM30710v1/GCA_000307105.1_ASM30710v1_feature_table.txt.gz','/System/Volumes/Data/ResearchData/Users/amedrano/RalfRabus/MultiomponentSystems/Desulfobacula_toluolica_Tol2/','linear','test_isolated_system.html',False)
 
 # get_genetic_distance(gene_dic,['T'])
 
@@ -1198,7 +1209,7 @@ def load_network(node_filename,edge_filename):
 
 # green_cases,yellow_cases,HPI = global_selection(G,T,gene_dic,pdic,df,'/ResearchData/Users/amedrano/RalfRabus/MultiomponentSystems/Desulfobacula_toluolica_Tol2','dorothy_greens.tsv','dorothy_yellow_greens.tsv')
 
-# In[41]:
+# In[18]:
 
 
 def get_df_red(df,green_cases,yellow_cases):
@@ -1219,7 +1230,7 @@ def get_df_red(df,green_cases,yellow_cases):
         if row['subject_accession'] in hit_cand or row['query_accession'] in hit_cpts: #or row['subject_accession'] in discarded:
             drop_list.append(index)
     df_red = df.drop(index = drop_list)
-    df_red.drop_duplicates('subject_accession',keep='last',inplace=True)
+    #df_red.drop_duplicates('subject_accession',keep='last',inplace=True)
     return df_red
 
 
@@ -1237,23 +1248,23 @@ if __name__ == '__main__':
     # parse arguments
     parser = argparse.ArgumentParser()
     # create a parser to handle options and arguments. Show help info if no args
-    parser.add_argument( '-d', '--data', type = str, dest = 'data', required=True, metavar = '<raw data table>', help = 'MANDATORY. the file name or file name with the absolute address of the gblast table for multi-component transport systems in tsv format.' )
-    parser.add_argument( '-db', '--database', type = str, dest = 'tcdb', required=True, metavar = '<tcdb.faa>', help = 'MANDATORY. the file name or file name with the absolute address of tcdb file in FASTA format.' )
-    parser.add_argument( '-ra', '--rootaddress', type = str, dest = 'ra', required=True, metavar = '<address>', help = 'MANDATORY. the absolute address of the multi-component system analysis with all relative results generated by Gblast under that directory. eg. "/ResearchData/Users/amedrano/RalfRabus/MultiomponentSystems/Desulfococcus_multivorans" ' )
-    parser.add_argument( '-ft', '--featuretable', type = str, dest = 'ft', required=True, metavar = '<featuretable.txt.gz>', help = 'MANDATORY. the file name or file name with the absolute address of the genomic feature table in gz compressed format.' )
-    parser.add_argument( '-clan', '--clan_info_file', type = str, dest = 'clan', required=True, metavar = '<Pfam-A.clans.tsv.gz>', help = 'MANDATORY. the file name or file name with the absolute address of the Pfam table in gz compressed format.' )
-    parser.add_argument( '-l', '--linear', action = 'store_false', dest = 'linear', default = True, help = 'Flag. if set, chromosomes of the genome in this analysis are non-linear.' )
-    parser.add_argument( '-dot', '--degree_of_tolerance', dest = 'dot', type = int, default = 2, help = 'The degree of tolerance of the network. default is 2, means 2 percent.' )
-    parser.add_argument( '-pog','--percent_of_homology',dest='pog', type = float, default=0.24, help = 'The maximum unaligned coverage that 2 TCDB proteins allowed to be recognized as homologous. Default is 0.24, that is, if maximum unaligned parts of 2 TCDB proteins are both smaller than 24 percent, they are homologous.')
+    parser.add_argument( '-d', '--data', type = str, dest = 'data', required=True, metavar = '<raw data table>', help = 'MANDATORY. Path to the output table in tsv format generated by program getMultCompSystems.pl. This table contains all the multicomponent systems matched by the query genome.' )
+    parser.add_argument( '-tcdb', '--tcdb-proteins', type = str, dest = 'tcdb', required=True, metavar = '<sequence file>', help = 'MANDATORY. Path to the file in fasta format with All the protein content in TCDB as generated by the program extractFamily.pl. This file should reflect the TCDB version that was used to analyze both single and multicomponet systems in the query genome.' )
+    parser.add_argument( '-ra', '--rootaddress', type = str, dest = 'ra', required=True, metavar = '<directory path>', help = 'MANDATORY. Path to the main output directory generated by program getMultCompSystems.pl.  This directory contains the output reports as well as all hydropathy plots for every match between the query genome and multicomponent systems in TCDB.' )
+    parser.add_argument( '-ft', '--featuretable', type = str, dest = 'ft', required=True, metavar = '<genome featuretable>', help = 'MANDATORY. Path to the feature table file as downloaded from NCBI genome assemblies.  This file is used to extract the genomic context of genes and it must be compressed in gzip format.' )
+    parser.add_argument( '-clan', '--clan_info_file', type = str, dest = 'clan', required=True, metavar = '<pfam clans file>', help = 'MANDATORY. Path to the file with Pfam clans as distributed by Pfam (i.e., Pfam-A.clans.tsv.gz). The information in this file is used to select the best matches reported by program getMultCompSystems.pl. This file should be compressed in  gzip format.' )
+    parser.add_argument( '-c', '--circular', action = 'store_false', dest = 'linear', default = True, help = 'Flag. if set, the replicon structure of the query genome is regarded as circular. This information is used to calculate the distance between pairs of genes. The default setting is: linear.' )
+    parser.add_argument( '-dot', '--degree_of_tolerance', dest = 'dot', type = int, default = 2, help  = 'The degree of tolerance of the network. This indicates ...  Default value is 2 (means 2 percent)' )
+    parser.add_argument( '-rcov','--reciprocal_coverage', dest='pog', type = float, default=0.24, help = 'The minimum alignment coverage for both the query and subject proteins to be considered candidate homologous. Default value is 0.76. ')
     args = parser.parse_args()
     if len(sys.argv) < 4:
         parser.print_help()
         sys.exit(1)
 
-    df = get_rawdata(args.data)
-    pdic = get_info(df['query_accession'], df['subject_accession'],args.ra,args.clan)
+    df,repeats = get_rawdata(args.data)
+    pdic = get_info(df['query_accession'], df['subject_accession'], args.ra,args.clan)
     gene_dic = get_gene_feature(args.ft)
-    G = initialize_raw_network(df,pdic,args.tcdb,args.ra,args.pog)
+    G = initialize_raw_network(df,repeats,pdic,args.tcdb,args.ra,args.pog)
     # save the initial network
     save_network(G, 'raw_network_nodes.txt', 'raw_network_edges.txt')
     if args.linear == True:
